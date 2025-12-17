@@ -1,36 +1,51 @@
 import { NextResponse } from 'next/server';
 
-// 주요 스포츠 시리즈 티커
+// 주요 스포츠 시리즈 티커 (실제 확인된 시리즈)
 const SPORTS_SERIES = [
+  // 미국 프로 스포츠
   'KXNFLGAME', 'KXNBAGAME', 'KXMLBGAME', 'KXNHLGAME',
-  'KXNCAAFGAME', 'KXNCAABGAME', 'KXEPLGAME', 'KXLALIGAGAME',
-  'KXSABOREDGAME', 'KXBUNDESLIGAGAME', 'KXCHAMPIONSLEAGUEGAME',
-  'KXUFCFIGHT', 'KXPGAGAME', 'KXTENNISGAME', 'KXF1RACE',
-  'KXNFLWINS', 'KXNBAWINS', 'KXMLBWINS', 'KXNHLWINS'
+  // 대학 스포츠
+  'KXNCAAFGAME', 'KXNCAABGAME', 
+  // 축구
+  'KXEPLGAME', 'KXLALIGAGAME', 'KXBUNDESLIGAGAME', 'KXSABOREDGAME',
+  'KXCHAMPIONSLEAGUEGAME', 'KXEUROLEAGUEGAME', 'KXHNLGAME',
+  'KXEREDIVISIEGAME', 'KXDANISHSUPERLIGAGAME',
+  // 기타 스포츠
+  'KXUFCFIGHT', 'KXPGATOUR', 'KXTENNISEXHIBITION', 'KXTENNISGAME',
+  'KXF1RACE', 'KXCSGOGAME',
+  // 어워드/챔피언십
+  'KXNFLMVP', 'KXNBAMVP', 'KXMLBMVP', 'KXNHLMVP',
+  'KXNFLAFCCHAMP', 'KXNFLNFCCHAMP', 'KXSUPERBOWLWINNER',
+  'KXNBACHAMP', 'KXMLBCHAMP', 'KXNHLCHAMP'
 ];
 
 export async function GET() {
   try {
     const allMarkets = [];
     
-    // 1. 일반 마켓 가져오기
-    const generalResponse = await fetch(
-      `https://api.elections.kalshi.com/trade-api/v2/markets?limit=1000`,
-      { 
+    // 1. 일반 마켓 가져오기 (cursor 기반 페이지네이션)
+    let cursor = null;
+    for (let i = 0; i < 3; i++) {
+      const url = cursor 
+        ? `https://api.elections.kalshi.com/trade-api/v2/markets?limit=1000&cursor=${cursor}`
+        : `https://api.elections.kalshi.com/trade-api/v2/markets?limit=1000`;
+      
+      const response = await fetch(url, { 
         next: { revalidate: 30 },
         headers: { 'Accept': 'application/json' }
-      }
-    );
-    
-    if (generalResponse.ok) {
-      const generalData = await generalResponse.json();
-      allMarkets.push(...(generalData.markets || []));
+      });
+      
+      if (!response.ok) break;
+      const data = await response.json();
+      allMarkets.push(...(data.markets || []));
+      cursor = data.cursor;
+      if (!cursor) break;
     }
     
     // 2. 스포츠 시리즈별 마켓 가져오기 (병렬)
     const sportsFetches = SPORTS_SERIES.map(series =>
       fetch(
-        `https://api.elections.kalshi.com/trade-api/v2/markets?limit=200&series_ticker=${series}`,
+        `https://api.elections.kalshi.com/trade-api/v2/markets?limit=500&series_ticker=${series}`,
         { 
           next: { revalidate: 30 },
           headers: { 'Accept': 'application/json' }
@@ -47,7 +62,7 @@ export async function GET() {
     // 중복 제거
     const seen = new Set();
     const uniqueMarkets = allMarkets.filter(m => {
-      if (seen.has(m.ticker)) return false;
+      if (!m.ticker || seen.has(m.ticker)) return false;
       seen.add(m.ticker);
       return true;
     });
