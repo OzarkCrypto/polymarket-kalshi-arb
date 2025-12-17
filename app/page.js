@@ -2,12 +2,33 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+const KNOWN_PERSONS = [
+  'kevin warsh', 'kevin hassett', 'arthur laffer', 'larry kudlow', 'judy shelton',
+  'ron paul', 'chamath palihapitiya', 'howard lutnick', 'scott bessent', 'elon musk',
+  'chris waller', 'christopher waller', 'michelle bowman', 'roger ferguson', 'rick rieder',
+  'jerome powell', 'philip jefferson', 'lorie logan', 'james bullard', 'david malpass',
+  'stephen miran', 'janet yellen', 'bill pulte', 'david zervos', 'marc sumerlin',
+  'larry lindsey', 'donald trump', 'joe biden', 'kamala harris', 'pete hegseth',
+  'marco rubio', 'tulsi gabbard', 'pam bondi', 'rfk', 'robert kennedy',
+  'sam bankman-fried', 'sbf', 'julian assange', 'edward snowden', 'kristi noem',
+  'naftali bennett', 'benny gantz', 'yair lapid'
+];
+
+const EVENT_PATTERNS = {
+  'fed_chair': ['fed chair', 'federal reserve chair', 'fed chairman'],
+  'prime_minister': ['prime minister', 'pm of', 'next pm'],
+  'ceo': ['ceo of', 'chief executive'],
+  'pardon': ['pardon'],
+  'visit': ['visit'],
+  'leave_cabinet': ['leave the trump administration', 'leave trump cabinet', 'first to leave', 'leave the trump cabinet'],
+};
+
 export default function Home() {
   const [polymarketData, setPolymarketData] = useState([]);
   const [kalshiData, setKalshiData] = useState([]);
   const [loading, setLoading] = useState({ polymarket: true, kalshi: true });
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [activeTab, setActiveTab] = useState('cross');
+  const [activeTab, setActiveTab] = useState('matched');
   const [budget, setBudget] = useState(100);
   const [feeRate, setFeeRate] = useState({ polymarket: 1, kalshi: 1 });
   const [minROI, setMinROI] = useState(0);
@@ -45,105 +66,139 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  const extractKeywords = (text) => {
-    if (!text) return [];
-    const stopWords = new Set(['will', 'the', 'a', 'an', 'be', 'is', 'are', 'was', 'were', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'or', 'and', 'not', 'no', 'yes', 'before', 'after', 'this', 'that', 'if', 'who', 'what', 'when', 'where', 'how', 'which', 'than', 'then', 'more', 'less', 'between', 'during']);
-    return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
-  };
+  const extractPerson = useCallback((text) => {
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    for (const person of KNOWN_PERSONS) {
+      if (lower.includes(person)) return person;
+    }
+    return null;
+  }, []);
 
-  const calcSimilarity = (k1, k2) => {
-    if (!k1.length || !k2.length) return 0;
-    const s1 = new Set(k1), s2 = new Set(k2);
-    const inter = [...s1].filter(x => s2.has(x)).length;
-    return inter / new Set([...s1, ...s2]).size;
-  };
+  const extractEventType = useCallback((text) => {
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    for (const [type, patterns] of Object.entries(EVENT_PATTERNS)) {
+      for (const pattern of patterns) {
+        if (lower.includes(pattern)) return type;
+      }
+    }
+    return null;
+  }, []);
+
+  const isExactMatch = useCallback((polyQ, kalshiQ) => {
+    const polyPerson = extractPerson(polyQ);
+    const kalshiPerson = extractPerson(kalshiQ);
+    
+    if (!polyPerson || !kalshiPerson) return { match: false };
+    
+    // 이름 변형 처리 (Chris/Christopher Waller)
+    const normalizeName = (name) => {
+      return name.replace('christopher', 'chris').replace('robert f. kennedy', 'rfk');
+    };
+    
+    if (normalizeName(polyPerson) !== normalizeName(kalshiPerson)) return { match: false };
+    
+    const polyEvent = extractEventType(polyQ);
+    const kalshiEvent = extractEventType(kalshiQ);
+    
+    if (!polyEvent || !kalshiEvent) return { match: false };
+    if (polyEvent !== kalshiEvent) return { match: false };
+    
+    return { match: true, person: polyPerson, eventType: polyEvent };
+  }, [extractPerson, extractEventType]);
 
   const crossArbs = useMemo(() => {
     const opps = [];
-    const polyKw = polymarketData.map(m => ({ m, kw: extractKeywords(m.question) }));
-    const kalshiKw = kalshiData.map(m => ({ m, kw: extractKeywords(m.question) }));
+    
+    for (const p of polymarketData) {
+      for (const k of kalshiData) {
+        const matchResult = isExactMatch(p.question, k.question);
+        
+        if (matchResult.match) {
+          const pFee = feeRate.polymarket / 100;
+          const kFee = feeRate.kalshi / 100;
+          const pY = p.yesPrice * (1 + pFee);
+          const pN = p.noPrice * (1 + pFee);
+          const kY = k.yesPrice * (1 + kFee);
+          const kN = k.noPrice * (1 + kFee);
 
-    for (const p of polyKw) {
-      for (const k of kalshiKw) {
-        const sim = calcSimilarity(p.kw, k.kw);
-        if (sim < 0.3) continue;
-
-        const pFee = feeRate.polymarket / 100;
-        const kFee = feeRate.kalshi / 100;
-        const pY = p.m.yesPrice * (1 + pFee);
-        const pN = p.m.noPrice * (1 + pFee);
-        const kY = k.m.yesPrice * (1 + kFee);
-        const kN = k.m.noPrice * (1 + kFee);
-
-        // Strategy 1: Poly YES + Kalshi NO
-        const t1 = pY + kN;
-        if (t1 < 1) {
-          const roi = (1 / t1 - 1) * 100;
-          if (roi >= minROI) {
-            opps.push({
-              id: `${p.m.id}-${k.m.id}-1`,
-              sim, poly: p.m, kalshi: k.m,
-              strat: 'P.Yes + K.No',
-              pPos: 'YES', kPos: 'NO',
-              pPrice: pY, kPrice: kN,
-              total: t1, roi,
-              profit: budget * (1 / t1 - 1),
-              pAlloc: budget * pY / t1,
-              kAlloc: budget * kN / t1,
-              shares: budget / t1
-            });
+          const t1 = pY + kN;
+          if (t1 < 1) {
+            const roi = (1 / t1 - 1) * 100;
+            if (roi >= minROI) {
+              opps.push({
+                id: `${p.id}-${k.id}-1`, person: matchResult.person, eventType: matchResult.eventType,
+                poly: p, kalshi: k, strat: 'P.Yes + K.No', pPos: 'YES', kPos: 'NO',
+                pPrice: pY, kPrice: kN, pRaw: p.yesPrice, kRaw: k.noPrice,
+                total: t1, roi, profit: budget * (1 / t1 - 1),
+                pAlloc: budget * pY / t1, kAlloc: budget * kN / t1, shares: budget / t1
+              });
+            }
           }
-        }
 
-        // Strategy 2: Poly NO + Kalshi YES
-        const t2 = pN + kY;
-        if (t2 < 1) {
-          const roi = (1 / t2 - 1) * 100;
-          if (roi >= minROI) {
-            opps.push({
-              id: `${p.m.id}-${k.m.id}-2`,
-              sim, poly: p.m, kalshi: k.m,
-              strat: 'P.No + K.Yes',
-              pPos: 'NO', kPos: 'YES',
-              pPrice: pN, kPrice: kY,
-              total: t2, roi,
-              profit: budget * (1 / t2 - 1),
-              pAlloc: budget * pN / t2,
-              kAlloc: budget * kY / t2,
-              shares: budget / t2
-            });
+          const t2 = pN + kY;
+          if (t2 < 1) {
+            const roi = (1 / t2 - 1) * 100;
+            if (roi >= minROI) {
+              opps.push({
+                id: `${p.id}-${k.id}-2`, person: matchResult.person, eventType: matchResult.eventType,
+                poly: p, kalshi: k, strat: 'P.No + K.Yes', pPos: 'NO', kPos: 'YES',
+                pPrice: pN, kPrice: kY, pRaw: p.noPrice, kRaw: k.yesPrice,
+                total: t2, roi, profit: budget * (1 / t2 - 1),
+                pAlloc: budget * pN / t2, kAlloc: budget * kY / t2, shares: budget / t2
+              });
+            }
           }
         }
       }
     }
     return opps.sort((a, b) => b.roi - a.roi);
-  }, [polymarketData, kalshiData, feeRate, minROI, budget]);
+  }, [polymarketData, kalshiData, feeRate, minROI, budget, isExactMatch]);
+
+  const matchedMarkets = useMemo(() => {
+    const matches = [];
+    const seen = new Set();
+    
+    for (const p of polymarketData) {
+      for (const k of kalshiData) {
+        const matchResult = isExactMatch(p.question, k.question);
+        
+        if (matchResult.match) {
+          const key = `${matchResult.person}-${matchResult.eventType}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          
+          const pFee = feeRate.polymarket / 100;
+          const kFee = feeRate.kalshi / 100;
+          
+          matches.push({
+            id: `match-${p.id}-${k.id}`, person: matchResult.person, eventType: matchResult.eventType,
+            poly: p, kalshi: k,
+            pYes: p.yesPrice, pNo: p.noPrice, kYes: k.yesPrice, kNo: k.noPrice,
+            yesDiff: Math.abs(p.yesPrice - k.yesPrice),
+            strat1Total: p.yesPrice * (1 + pFee) + k.noPrice * (1 + kFee),
+            strat2Total: p.noPrice * (1 + pFee) + k.yesPrice * (1 + kFee),
+          });
+        }
+      }
+    }
+    return matches.sort((a, b) => b.yesDiff - a.yesDiff);
+  }, [polymarketData, kalshiData, feeRate, isExactMatch]);
 
   const intraArbs = useMemo(() => {
     const opps = [];
     
-    polymarketData.forEach(m => {
-      const fee = feeRate.polymarket / 100;
+    [...polymarketData, ...kalshiData].forEach(m => {
+      const platform = m.platform || (polymarketData.includes(m) ? 'poly' : 'kalshi');
+      const fee = platform === 'poly' ? feeRate.polymarket / 100 : feeRate.kalshi / 100;
       const yP = Math.ceil(m.yesPrice * (1 + fee) * 100) / 100;
       const nP = Math.ceil(m.noPrice * (1 + fee) * 100) / 100;
       const t = yP + nP;
       if (t < 1) {
         const roi = (1 / t - 1) * 100;
         if (roi >= minROI) {
-          opps.push({ ...m, platform: 'poly', yP, nP, total: t, roi, profit: budget * (1 / t - 1), shares: budget / t });
-        }
-      }
-    });
-
-    kalshiData.forEach(m => {
-      const fee = feeRate.kalshi / 100;
-      const yP = Math.ceil(m.yesPrice * (1 + fee) * 100) / 100;
-      const nP = Math.ceil(m.noPrice * (1 + fee) * 100) / 100;
-      const t = yP + nP;
-      if (t < 1) {
-        const roi = (1 / t - 1) * 100;
-        if (roi >= minROI) {
-          opps.push({ ...m, platform: 'kalshi', yP, nP, total: t, roi, profit: budget * (1 / t - 1), shares: budget / t });
+          opps.push({ ...m, platform, yP, nP, total: t, roi, profit: budget * (1 / t - 1), shares: budget / t });
         }
       }
     });
@@ -151,68 +206,34 @@ export default function Home() {
     return opps.sort((a, b) => b.roi - a.roi);
   }, [polymarketData, kalshiData, feeRate, minROI, budget]);
 
-  const priceDiffs = useMemo(() => {
-    const diffs = [];
-    const polyKw = polymarketData.map(m => ({ m, kw: extractKeywords(m.question) }));
-    const kalshiKw = kalshiData.map(m => ({ m, kw: extractKeywords(m.question) }));
-
-    for (const p of polyKw) {
-      for (const k of kalshiKw) {
-        const sim = calcSimilarity(p.kw, k.kw);
-        if (sim >= 0.35) {
-          const yDiff = Math.abs(p.m.yesPrice - k.m.yesPrice);
-          const nDiff = Math.abs(p.m.noPrice - k.m.noPrice);
-          if ((yDiff + nDiff) / 2 >= 0.03) {
-            diffs.push({
-              id: `d-${p.m.id}-${k.m.id}`,
-              sim, poly: p.m, kalshi: k.m,
-              yDiff, nDiff,
-              avgDiff: (yDiff + nDiff) / 2
-            });
-          }
-        }
-      }
-    }
-    return diffs.sort((a, b) => b.avgDiff - a.avgDiff).slice(0, 50);
-  }, [polymarketData, kalshiData]);
-
   const filtered = {
-    cross: crossArbs.filter(o => !searchQuery || o.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) || o.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase())),
+    cross: crossArbs.filter(o => !searchQuery || o.person?.includes(searchQuery.toLowerCase()) || o.poly.question.toLowerCase().includes(searchQuery.toLowerCase())),
+    matched: matchedMarkets.filter(o => !searchQuery || o.person?.includes(searchQuery.toLowerCase()) || o.poly.question.toLowerCase().includes(searchQuery.toLowerCase())),
     intra: intraArbs.filter(o => !searchQuery || o.question.toLowerCase().includes(searchQuery.toLowerCase())),
-    diff: priceDiffs.filter(o => !searchQuery || o.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) || o.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase()))
   };
 
   const isLoading = loading.polymarket || loading.kalshi;
+  const formatEventType = (type) => ({ fed_chair: 'Fed Chair', prime_minister: 'PM', ceo: 'CEO', pardon: 'Pardon', visit: 'Visit', leave_cabinet: 'Cabinet Exit' }[type] || type);
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <header className="border-b border-[--border] bg-[--bg-alt] px-4 py-2">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <h1 className="font-semibold text-sm">Polymarket × Kalshi Arb Scanner</h1>
-            <span className="text-[10px] text-[--text-muted]">pY&apos; + pN&apos; &lt; 1</span>
+            <span className="text-[10px] text-[--text-muted]">Person + Event Matching</span>
           </div>
-          
           <div className="flex items-center gap-4 text-[11px]">
             <div className="flex items-center gap-1">
               <span className="badge badge-poly">POLY {polymarketData.length}</span>
               <span className="badge badge-kalshi">KALSHI {kalshiData.length}</span>
             </div>
-            {lastUpdate && (
-              <span className="text-[--text-muted]">
-                <span className="status-dot status-live"></span>
-                {lastUpdate.toLocaleTimeString()}
-              </span>
-            )}
-            <button onClick={fetchAll} disabled={isLoading} className="btn-sm btn-primary">
-              {isLoading ? '...' : '↻ Refresh'}
-            </button>
+            {lastUpdate && <span className="text-[--text-muted]"><span className="status-dot status-live"></span>{lastUpdate.toLocaleTimeString()}</span>}
+            <button onClick={fetchAll} disabled={isLoading} className="btn-sm btn-primary">{isLoading ? '...' : '↻ Refresh'}</button>
           </div>
         </div>
       </header>
 
-      {/* Controls */}
       <div className="border-b border-[--border] px-4 py-2 flex items-center gap-4 flex-wrap bg-white">
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">Budget $</label>
@@ -232,197 +253,140 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-1 flex-1 max-w-xs">
           <label className="text-[10px] text-[--text-muted]">Search</label>
-          <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="keyword..." className="input-sm flex-1" style={{ width: 'auto' }} />
+          <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="warsh, hassett..." className="input-sm flex-1" style={{ width: 'auto' }} />
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="tab-bar px-2">
-        <button className={`tab-btn ${activeTab === 'cross' ? 'active' : ''}`} onClick={() => setActiveTab('cross')}>
-          Cross-Platform ({filtered.cross.length})
-        </button>
-        <button className={`tab-btn ${activeTab === 'intra' ? 'active' : ''}`} onClick={() => setActiveTab('intra')}>
-          Single Platform ({filtered.intra.length})
-        </button>
-        <button className={`tab-btn ${activeTab === 'diff' ? 'active' : ''}`} onClick={() => setActiveTab('diff')}>
-          Price Gaps ({filtered.diff.length})
-        </button>
+        <button className={`tab-btn ${activeTab === 'matched' ? 'active' : ''}`} onClick={() => setActiveTab('matched')}>🔗 Matched ({filtered.matched.length})</button>
+        <button className={`tab-btn ${activeTab === 'cross' ? 'active' : ''}`} onClick={() => setActiveTab('cross')}>🎯 Arbitrage ({filtered.cross.length})</button>
+        <button className={`tab-btn ${activeTab === 'intra' ? 'active' : ''}`} onClick={() => setActiveTab('intra')}>📊 Single ({filtered.intra.length})</button>
       </div>
 
-      {/* Content */}
       <div className="overflow-x-auto" style={{ maxHeight: 'calc(100vh - 160px)' }}>
-        {/* Cross-Platform Table */}
+        {activeTab === 'matched' && (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{width:30}}>#</th>
+                <th style={{width:120}}>Person</th>
+                <th style={{width:70}}>Event</th>
+                <th>Polymarket</th>
+                <th style={{width:55}}>P.Yes</th>
+                <th>Kalshi</th>
+                <th style={{width:55}}>K.Yes</th>
+                <th style={{width:50}}>Δ</th>
+                <th style={{width:100}}>Arb Check</th>
+                <th style={{width:40}}>Links</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.matched.length === 0 ? (
+                <tr><td colSpan={10} className="text-center py-8 text-[--text-muted]">No matched markets found</td></tr>
+              ) : filtered.matched.map((m, i) => (
+                <tr key={m.id} className={m.strat1Total < 1 || m.strat2Total < 1 ? 'arb-row' : ''}>
+                  <td className="text-[--text-muted]">{i + 1}</td>
+                  <td className="font-medium capitalize text-[12px]">{m.person}</td>
+                  <td><span className="text-[9px] px-1 py-0.5 bg-gray-100 rounded">{formatEventType(m.eventType)}</span></td>
+                  <td><span className="q-text text-[11px]" title={m.poly.question}>{m.poly.question}</span></td>
+                  <td className="num">{(m.pYes * 100).toFixed(0)}¢</td>
+                  <td><span className="q-text text-[11px]" title={m.kalshi.question}>{m.kalshi.question}</span></td>
+                  <td className="num">{(m.kYes * 100).toFixed(0)}¢</td>
+                  <td className={`num font-semibold ${m.yesDiff >= 0.1 ? 'num-red' : m.yesDiff >= 0.05 ? 'text-orange-500' : ''}`}>{(m.yesDiff * 100).toFixed(0)}¢</td>
+                  <td className="text-[10px]">
+                    {m.strat1Total < 1 ? <span className="text-green-600 font-medium">✓ P.Y+K.N={m.strat1Total.toFixed(3)}</span>
+                    : m.strat2Total < 1 ? <span className="text-green-600 font-medium">✓ P.N+K.Y={m.strat2Total.toFixed(3)}</span>
+                    : <span className="text-[--text-muted]">—</span>}
+                  </td>
+                  <td>
+                    <a href={m.poly.url} target="_blank" rel="noopener noreferrer" className="link mr-1">P</a>
+                    <a href={m.kalshi.url} target="_blank" rel="noopener noreferrer" className="link">K</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
         {activeTab === 'cross' && (
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: 30 }}>#</th>
-                <th style={{ width: 50 }}>Match</th>
-                <th>Polymarket</th>
-                <th>Kalshi</th>
-                <th style={{ width: 90 }}>Strategy</th>
-                <th style={{ width: 70 }}>P.Price</th>
-                <th style={{ width: 70 }}>K.Price</th>
-                <th style={{ width: 70 }}>Total</th>
-                <th style={{ width: 70 }}>ROI</th>
-                <th style={{ width: 70 }}>Profit</th>
-                <th style={{ width: 60 }}>Links</th>
+                <th style={{width:30}}>#</th>
+                <th style={{width:110}}>Person</th>
+                <th style={{width:70}}>Event</th>
+                <th style={{width:80}}>Strategy</th>
+                <th style={{width:60}}>P.Price</th>
+                <th style={{width:60}}>K.Price</th>
+                <th style={{width:60}}>Total</th>
+                <th style={{width:60}}>ROI</th>
+                <th style={{width:60}}>Profit</th>
+                <th style={{width:40}}>Links</th>
               </tr>
             </thead>
             <tbody>
               {filtered.cross.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-8 text-[--text-muted]">No arbitrage opportunities found</td></tr>
-              ) : (
-                filtered.cross.slice(0, 100).map((o, i) => (
-                  <>
-                    <tr key={o.id} className="arb-row cursor-pointer" onClick={() => setExpandedId(expandedId === o.id ? null : o.id)}>
-                      <td><span className="badge badge-rank">{i + 1}</span></td>
-                      <td><span className="num">{(o.sim * 100).toFixed(0)}%</span></td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <span className="badge badge-poly">{o.pPos}</span>
-                          <span className="q-text" title={o.poly.question}>{o.poly.question}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <span className="badge badge-kalshi">{o.kPos}</span>
-                          <span className="q-text" title={o.kalshi.question}>{o.kalshi.question}</span>
-                        </div>
-                      </td>
-                      <td className="text-[10px] text-[--text-muted]">{o.strat}</td>
-                      <td className="num num-purple">{o.pPrice.toFixed(4)}</td>
-                      <td className="num num-teal">{o.kPrice.toFixed(4)}</td>
-                      <td className="num num-blue">{o.total.toFixed(4)}</td>
-                      <td><span className="badge badge-roi">+{o.roi.toFixed(2)}%</span></td>
-                      <td className="num num-green font-semibold">+${o.profit.toFixed(2)}</td>
-                      <td>
-                        <a href={o.poly.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link mr-1">P</a>
-                        <a href={o.kalshi.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link">K</a>
-                      </td>
-                    </tr>
-                    {expandedId === o.id && (
-                      <tr key={`${o.id}-exp`} className="expand-row">
-                        <td colSpan={11}>
-                          <div className="flex gap-6 text-[11px]">
-                            <div>
-                              <span className="text-[--text-muted]">Poly Alloc:</span>
-                              <span className="num num-purple ml-1">${o.pAlloc.toFixed(2)}</span>
-                            </div>
-                            <div>
-                              <span className="text-[--text-muted]">Kalshi Alloc:</span>
-                              <span className="num num-teal ml-1">${o.kAlloc.toFixed(2)}</span>
-                            </div>
-                            <div>
-                              <span className="text-[--text-muted]">Shares:</span>
-                              <span className="num ml-1">{o.shares.toFixed(2)}</span>
-                            </div>
-                            <div>
-                              <span className="text-[--text-muted]">Payout:</span>
-                              <span className="num num-green ml-1">${o.shares.toFixed(2)}</span>
-                            </div>
-                            <div className="text-[--text-muted]">
-                              Formula: ${budget} ÷ {o.total.toFixed(4)} = {o.shares.toFixed(2)} shares → ${o.shares.toFixed(2)} payout
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                ))
-              )}
+                <tr><td colSpan={10} className="text-center py-8 text-[--text-muted]">No arbitrage opportunities</td></tr>
+              ) : filtered.cross.map((o, i) => (
+                <tr key={o.id} className="arb-row cursor-pointer" onClick={() => setExpandedId(expandedId === o.id ? null : o.id)}>
+                  <td><span className="badge badge-rank">{i + 1}</span></td>
+                  <td className="font-medium capitalize text-[12px]">{o.person}</td>
+                  <td><span className="text-[9px] px-1 py-0.5 bg-gray-100 rounded">{formatEventType(o.eventType)}</span></td>
+                  <td className="text-[10px]"><span className="badge badge-poly">{o.pPos}</span>+<span className="badge badge-kalshi">{o.kPos}</span></td>
+                  <td className="num num-purple">{o.pPrice.toFixed(3)}</td>
+                  <td className="num num-teal">{o.kPrice.toFixed(3)}</td>
+                  <td className="num num-blue">{o.total.toFixed(4)}</td>
+                  <td><span className="badge badge-roi">+{o.roi.toFixed(1)}%</span></td>
+                  <td className="num num-green font-semibold">+${o.profit.toFixed(2)}</td>
+                  <td>
+                    <a href={o.poly.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link mr-1">P</a>
+                    <a href={o.kalshi.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link">K</a>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
 
-        {/* Single Platform Table */}
         {activeTab === 'intra' && (
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: 30 }}>#</th>
-                <th style={{ width: 60 }}>Platform</th>
+                <th style={{width:30}}>#</th>
+                <th style={{width:55}}>Platform</th>
                 <th>Market</th>
-                <th style={{ width: 70 }}>Yes&apos;</th>
-                <th style={{ width: 70 }}>No&apos;</th>
-                <th style={{ width: 70 }}>Total</th>
-                <th style={{ width: 70 }}>ROI</th>
-                <th style={{ width: 70 }}>Profit</th>
-                <th style={{ width: 50 }}>Link</th>
+                <th style={{width:60}}>Yes&apos;</th>
+                <th style={{width:60}}>No&apos;</th>
+                <th style={{width:60}}>Total</th>
+                <th style={{width:60}}>ROI</th>
+                <th style={{width:60}}>Profit</th>
+                <th style={{width:40}}>Link</th>
               </tr>
             </thead>
             <tbody>
               {filtered.intra.length === 0 ? (
-                <tr><td colSpan={9} className="text-center py-8 text-[--text-muted]">No single-platform arbitrage found</td></tr>
-              ) : (
-                filtered.intra.slice(0, 100).map((o, i) => (
-                  <tr key={`${o.platform}-${o.id}`} className="arb-row">
-                    <td><span className="badge badge-rank">{i + 1}</span></td>
-                    <td><span className={`badge badge-${o.platform}`}>{o.platform.toUpperCase()}</span></td>
-                    <td><span className="q-text" title={o.question}>{o.question}</span></td>
-                    <td className="num num-green">{o.yP.toFixed(4)}</td>
-                    <td className="num num-red">{o.nP.toFixed(4)}</td>
-                    <td className="num num-blue">{o.total.toFixed(4)}</td>
-                    <td><span className="badge badge-roi">+{o.roi.toFixed(2)}%</span></td>
-                    <td className="num num-green font-semibold">+${o.profit.toFixed(2)}</td>
-                    <td><a href={o.url} target="_blank" rel="noopener noreferrer" className="link">→</a></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-
-        {/* Price Gaps Table */}
-        {activeTab === 'diff' && (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th style={{ width: 30 }}>#</th>
-                <th style={{ width: 50 }}>Match</th>
-                <th>Polymarket</th>
-                <th style={{ width: 60 }}>P.Yes</th>
-                <th style={{ width: 60 }}>P.No</th>
-                <th>Kalshi</th>
-                <th style={{ width: 60 }}>K.Yes</th>
-                <th style={{ width: 60 }}>K.No</th>
-                <th style={{ width: 60 }}>Δ Yes</th>
-                <th style={{ width: 60 }}>Δ No</th>
-                <th style={{ width: 50 }}>Links</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.diff.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-8 text-[--text-muted]">No significant price gaps found</td></tr>
-              ) : (
-                filtered.diff.map((o, i) => (
-                  <tr key={o.id}>
-                    <td className="text-[--text-muted]">{i + 1}</td>
-                    <td><span className="num">{(o.sim * 100).toFixed(0)}%</span></td>
-                    <td><span className="q-text" title={o.poly.question}>{o.poly.question}</span></td>
-                    <td className="num">{(o.poly.yesPrice * 100).toFixed(1)}¢</td>
-                    <td className="num">{(o.poly.noPrice * 100).toFixed(1)}¢</td>
-                    <td><span className="q-text" title={o.kalshi.question}>{o.kalshi.question}</span></td>
-                    <td className="num">{(o.kalshi.yesPrice * 100).toFixed(1)}¢</td>
-                    <td className="num">{(o.kalshi.noPrice * 100).toFixed(1)}¢</td>
-                    <td className={`num ${o.yDiff >= 0.05 ? 'num-red font-semibold' : ''}`}>{(o.yDiff * 100).toFixed(1)}¢</td>
-                    <td className={`num ${o.nDiff >= 0.05 ? 'num-red font-semibold' : ''}`}>{(o.nDiff * 100).toFixed(1)}¢</td>
-                    <td>
-                      <a href={o.poly.url} target="_blank" rel="noopener noreferrer" className="link mr-1">P</a>
-                      <a href={o.kalshi.url} target="_blank" rel="noopener noreferrer" className="link">K</a>
-                    </td>
-                  </tr>
-                ))
-              )}
+                <tr><td colSpan={9} className="text-center py-8 text-[--text-muted]">No single-platform arb</td></tr>
+              ) : filtered.intra.map((o, i) => (
+                <tr key={`${o.platform}-${o.id}`} className="arb-row">
+                  <td><span className="badge badge-rank">{i + 1}</span></td>
+                  <td><span className={`badge badge-${o.platform}`}>{o.platform.toUpperCase()}</span></td>
+                  <td><span className="q-text" title={o.question}>{o.question}</span></td>
+                  <td className="num num-green">{o.yP.toFixed(3)}</td>
+                  <td className="num num-red">{o.nP.toFixed(3)}</td>
+                  <td className="num num-blue">{o.total.toFixed(4)}</td>
+                  <td><span className="badge badge-roi">+{o.roi.toFixed(1)}%</span></td>
+                  <td className="num num-green font-semibold">+${o.profit.toFixed(2)}</td>
+                  <td><a href={o.url} target="_blank" rel="noopener noreferrer" className="link">→</a></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
       </div>
 
-      {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[--border] bg-white px-4 py-1 text-[10px] text-[--text-muted] flex justify-between">
-        <span>⚠️ Cross-platform requires matching resolution rules</span>
-        <span>Auto-refresh: 60s</span>
+        <span>⚠️ Verify resolution rules match before trading</span>
+        <span>Matching: Person + Event Type | Auto-refresh: 60s</span>
       </footer>
     </div>
   );
