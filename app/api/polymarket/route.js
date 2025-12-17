@@ -2,27 +2,44 @@ import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    const params = new URLSearchParams({
-      limit: '500',
-      closed: 'false',
-      active: 'true'
-    });
+    // Fetch multiple pages (500 per page, up to 3000 markets)
+    const allMarkets = [];
+    const pageSize = 500;
+    const maxPages = 6; // 3000 markets max
     
-    const response = await fetch(
-      `https://gamma-api.polymarket.com/markets?${params}`,
-      { 
-        next: { revalidate: 30 },
-        headers: {
-          'Accept': 'application/json',
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String(page * pageSize),
+        closed: 'false',
+        active: 'true'
+      });
+      
+      const response = await fetch(
+        `https://gamma-api.polymarket.com/markets?${params}`,
+        { 
+          next: { revalidate: 30 },
+          headers: {
+            'Accept': 'application/json',
+          }
         }
+      );
+      
+      if (!response.ok) {
+        console.error(`Polymarket API error on page ${page}: ${response.status}`);
+        break;
       }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`Polymarket API error: ${response.status}`);
+      
+      const pageData = await response.json();
+      if (!pageData || pageData.length === 0) break;
+      
+      allMarkets.push(...pageData);
+      
+      // If we got less than pageSize, we've reached the end
+      if (pageData.length < pageSize) break;
     }
     
-    const data = await response.json();
+    const data = allMarkets;
     
     // Process and filter markets
     const processed = data
