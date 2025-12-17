@@ -2,47 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
-// 알려진 인물/엔티티
-const KNOWN_ENTITIES = [
-  // Fed Chair candidates
-  'kevin warsh', 'kevin hassett', 'arthur laffer', 'larry kudlow', 'judy shelton',
-  'ron paul', 'chamath palihapitiya', 'howard lutnick', 'scott bessent', 'elon musk',
-  'chris waller', 'christopher waller', 'michelle bowman', 'roger ferguson', 'rick rieder',
-  'jerome powell', 'philip jefferson', 'lorie logan', 'james bullard', 'david malpass',
-  'stephen miran', 'janet yellen', 'bill pulte', 'david zervos', 'marc sumerlin', 'larry lindsey',
-  // Politicians
-  'donald trump', 'joe biden', 'kamala harris', 'pete hegseth', 'marco rubio', 
-  'tulsi gabbard', 'pam bondi', 'robert kennedy', 'rfk', 'kristi noem', 'mike waltz',
-  'lee zeldin', 'doug burgum', 'chris wright', 'elise stefanik', 'john ratcliffe',
-  // Israel PM candidates
-  'naftali bennett', 'benny gantz', 'yair lapid', 'benjamin netanyahu', 'itamar ben-gvir',
-  // Pardon targets
-  'sam bankman-fried', 'sbf', 'julian assange', 'edward snowden', 'steve bannon',
-  'roger stone', 'bob menendez', 'derek chauvin', 'joe exotic',
-  // Tech/Business
-  'sundar pichai', 'tim cook', 'satya nadella', 'mark zuckerberg', 'jeff bezos',
-  // Countries/Orgs
-  'ukraine', 'russia', 'china', 'israel', 'iran', 'nato', 'bitcoin', 'ethereum',
-];
-
-// 이벤트 패턴 (더 확장)
-const EVENT_PATTERNS = {
-  'fed_chair': ['fed chair', 'federal reserve chair', 'next fed', 'nominate.*fed'],
-  'prime_minister': ['prime minister', 'next pm'],
-  'ceo': ['ceo', 'chief executive'],
-  'pardon': ['pardon'],
-  'visit': ['visit'],
-  'leave_cabinet': ['leave.*administration', 'leave.*cabinet', 'first.*leave'],
-  'resign': ['resign', 'step down', 'out as'],
-  'impeach': ['impeach'],
-  'recession': ['recession'],
-  'rate_cut': ['rate cut', 'interest rate'],
-  'price_target': ['reach \\$', 'hit \\$', 'price'],
-  'election': ['election', 'elected', 'win.*election'],
-  'ceasefire': ['ceasefire', 'peace deal'],
-  'war': ['war', 'invasion', 'attack'],
-};
-
 export default function Home() {
   const [polymarketData, setPolymarketData] = useState([]);
   const [kalshiData, setKalshiData] = useState([]);
@@ -52,7 +11,7 @@ export default function Home() {
   const [budget, setBudget] = useState(100);
   const [feeRate, setFeeRate] = useState({ polymarket: 1, kalshi: 1 });
   const [minROI, setMinROI] = useState(0);
-  const [expandedId, setExpandedId] = useState(null);
+  const [minSimilarity, setMinSimilarity] = useState(35);
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchPolymarket = useCallback(async () => {
@@ -86,110 +45,34 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  // 엔티티 추출 (복수 가능)
-  const extractEntities = useCallback((text) => {
-    if (!text) return [];
-    const lower = text.toLowerCase();
-    const found = [];
-    for (const entity of KNOWN_ENTITIES) {
-      if (lower.includes(entity)) {
-        found.push(entity);
-      }
-    }
-    return found;
-  }, []);
-
-  // 이벤트 유형 추출
-  const extractEventType = useCallback((text) => {
-    if (!text) return null;
-    const lower = text.toLowerCase();
-    for (const [type, patterns] of Object.entries(EVENT_PATTERNS)) {
-      for (const pattern of patterns) {
-        if (new RegExp(pattern).test(lower)) return type;
-      }
-    }
-    return null;
-  }, []);
-
-  // 연도 추출
-  const extractYear = useCallback((text) => {
-    if (!text) return null;
-    const match = text.match(/\b(202[4-9]|203[0-9])\b/);
-    return match ? match[1] : null;
-  }, []);
-
-  // 핵심 키워드 추출
+  // 키워드 추출 (더 관대하게)
   const extractKeywords = useCallback((text) => {
     if (!text) return new Set();
-    const stopwords = new Set(['will', 'the', 'a', 'an', 'be', 'is', 'are', 'to', 'of', 'in', 'for', 'on', 'by', 'or', 'and', 'before', 'after', 'this', 'that', 'next', 'first', 'who', 'what', 'when', 'where', 'how']);
-    const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/);
-    return new Set(words.filter(w => w.length > 2 && !stopwords.has(w)));
+    const stopwords = new Set([
+      'will', 'the', 'a', 'an', 'be', 'is', 'are', 'to', 'of', 'in', 'for', 'on', 
+      'by', 'or', 'and', 'before', 'after', 'this', 'that', 'next', 'first', 'who', 
+      'what', 'when', 'where', 'how', 'than', 'more', 'less', 'any', 'have', 'has',
+      'does', 'do', 'did', 'been', 'being', 'their', 'there', 'they', 'them', 'its'
+    ]);
+    const words = text.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !stopwords.has(w));
+    return new Set(words);
   }, []);
 
-  // 매칭 점수 계산
-  const calculateMatchScore = useCallback((polyQ, kalshiQ) => {
-    const pEntities = extractEntities(polyQ);
-    const kEntities = extractEntities(kalshiQ);
-    const pEvent = extractEventType(polyQ);
-    const kEvent = extractEventType(kalshiQ);
-    const pYear = extractYear(polyQ);
-    const kYear = extractYear(kalshiQ);
-    const pKeywords = extractKeywords(polyQ);
-    const kKeywords = extractKeywords(kalshiQ);
+  // Jaccard 유사도
+  const calcSimilarity = useCallback((kw1, kw2) => {
+    if (!kw1.size || !kw2.size) return 0;
+    const intersection = [...kw1].filter(w => kw2.has(w));
+    const union = new Set([...kw1, ...kw2]);
+    return (intersection.length / union.size) * 100;
+  }, []);
 
-    let score = 0;
-    let matchReason = [];
-
-    // 1. 엔티티 매칭 (가장 중요)
-    const commonEntities = pEntities.filter(e => {
-      // Chris/Christopher Waller 같은 변형 처리
-      const normalize = (s) => s.replace('christopher', 'chris').replace('robert f. kennedy', 'rfk');
-      return kEntities.some(ke => normalize(e) === normalize(ke));
-    });
-    
-    if (commonEntities.length > 0) {
-      score += 40 * commonEntities.length;
-      matchReason.push(`Entity: ${commonEntities.join(', ')}`);
-    }
-
-    // 2. 이벤트 유형 매칭
-    if (pEvent && kEvent && pEvent === kEvent) {
-      score += 30;
-      matchReason.push(`Event: ${pEvent}`);
-    }
-
-    // 3. 연도 매칭 (있으면 같아야 함)
-    if (pYear && kYear) {
-      if (pYear === kYear) {
-        score += 20;
-        matchReason.push(`Year: ${pYear}`);
-      } else {
-        score -= 50; // 연도가 다르면 큰 페널티
-      }
-    }
-
-    // 4. 키워드 유사도
-    const intersection = [...pKeywords].filter(w => kKeywords.has(w));
-    const union = new Set([...pKeywords, ...kKeywords]);
-    const jaccard = intersection.length / union.size;
-    
-    if (jaccard >= 0.3) {
-      score += Math.round(jaccard * 30);
-      if (jaccard >= 0.5) matchReason.push(`Keywords: ${Math.round(jaccard * 100)}%`);
-    }
-
-    // 최소 점수 기준
-    const isMatch = score >= 50 && (commonEntities.length > 0 || (pEvent && kEvent && pEvent === kEvent));
-
-    return {
-      score,
-      isMatch,
-      reason: matchReason.join(' | '),
-      entities: commonEntities,
-      eventType: pEvent || kEvent,
-      year: pYear || kYear
-    };
-  }, [extractEntities, extractEventType, extractYear, extractKeywords]);
+  // 공통 키워드 찾기
+  const findCommonKeywords = useCallback((kw1, kw2) => {
+    return [...kw1].filter(w => kw2.has(w));
+  }, []);
 
   // 모든 매칭된 마켓 찾기
   const matchedMarkets = useMemo(() => {
@@ -197,11 +80,15 @@ export default function Home() {
     const seen = new Set();
 
     for (const p of polymarketData) {
+      const pKw = extractKeywords(p.question);
+      
       for (const k of kalshiData) {
-        const result = calculateMatchScore(p.question, k.question);
+        const kKw = extractKeywords(k.question);
+        const similarity = calcSimilarity(pKw, kKw);
+        const commonKw = findCommonKeywords(pKw, kKw);
         
-        if (result.isMatch) {
-          // 중복 방지 (같은 마켓 쌍이 여러 번 나오지 않도록)
+        // 매칭 조건: 유사도 기준 이상 OR 공통 키워드 3개 이상
+        if (similarity >= minSimilarity || commonKw.length >= 3) {
           const key = [p.id, k.id].sort().join('-');
           if (seen.has(key)) continue;
           seen.add(key);
@@ -209,22 +96,18 @@ export default function Home() {
           const pFee = feeRate.polymarket / 100;
           const kFee = feeRate.kalshi / 100;
           
-          // 두 전략의 합계 계산
-          const strat1Total = p.yesPrice * (1 + pFee) + k.noPrice * (1 + kFee);  // P.Yes + K.No
-          const strat2Total = p.noPrice * (1 + pFee) + k.yesPrice * (1 + kFee);  // P.No + K.Yes
+          const strat1Total = p.yesPrice * (1 + pFee) + k.noPrice * (1 + kFee);
+          const strat2Total = p.noPrice * (1 + pFee) + k.yesPrice * (1 + kFee);
           
           const hasArb = strat1Total < 1 || strat2Total < 1;
-          const bestStrat = strat1Total < strat2Total ? 1 : 2;
           const bestTotal = Math.min(strat1Total, strat2Total);
-          const roi = bestTotal < 1 ? (1 / bestTotal - 1) * 100 : 0;
+          const bestStrat = strat1Total < strat2Total ? 1 : 2;
+          const roi = hasArb ? (1 / bestTotal - 1) * 100 : 0;
 
           matches.push({
             id: key,
-            score: result.score,
-            reason: result.reason,
-            entities: result.entities,
-            eventType: result.eventType,
-            year: result.year,
+            similarity,
+            commonKeywords: commonKw,
             poly: p,
             kalshi: k,
             pYes: p.yesPrice,
@@ -244,10 +127,10 @@ export default function Home() {
       }
     }
     
-    return matches.sort((a, b) => b.score - a.score);
-  }, [polymarketData, kalshiData, feeRate, budget, calculateMatchScore]);
+    return matches.sort((a, b) => b.similarity - a.similarity);
+  }, [polymarketData, kalshiData, feeRate, budget, minSimilarity, extractKeywords, calcSimilarity, findCommonKeywords]);
 
-  // 차익거래 기회만 필터
+  // 차익거래 기회만
   const arbOpportunities = useMemo(() => {
     return matchedMarkets
       .filter(m => m.hasArb && m.roi >= minROI)
@@ -286,7 +169,7 @@ export default function Home() {
     matched: matchedMarkets.filter(m => !searchQuery || 
       m.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.entities?.some(e => e.includes(searchQuery.toLowerCase()))),
+      m.commonKeywords.some(kw => kw.includes(searchQuery.toLowerCase()))),
     arb: arbOpportunities.filter(m => !searchQuery || 
       m.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase())),
@@ -294,16 +177,6 @@ export default function Home() {
   };
 
   const isLoading = loading.polymarket || loading.kalshi;
-
-  const formatEventType = (type) => {
-    const map = {
-      fed_chair: 'Fed Chair', prime_minister: 'PM', ceo: 'CEO', pardon: 'Pardon',
-      visit: 'Visit', leave_cabinet: 'Cabinet', resign: 'Resign', impeach: 'Impeach',
-      recession: 'Recession', rate_cut: 'Rate', price_target: 'Price', election: 'Election',
-      ceasefire: 'Peace', war: 'War'
-    };
-    return map[type] || type || '—';
-  };
 
   return (
     <div className="min-h-screen pb-8">
@@ -323,10 +196,10 @@ export default function Home() {
       </header>
 
       {/* Controls */}
-      <div className="border-b border-[--border] px-4 py-2 flex items-center gap-4 flex-wrap bg-white">
+      <div className="border-b border-[--border] px-4 py-2 flex items-center gap-3 flex-wrap bg-white">
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">Budget $</label>
-          <input type="number" value={budget} onChange={e => setBudget(Number(e.target.value) || 100)} className="input-sm" />
+          <input type="number" value={budget} onChange={e => setBudget(Number(e.target.value) || 100)} className="input-sm w-16" />
         </div>
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">P.Fee %</label>
@@ -335,6 +208,10 @@ export default function Home() {
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">K.Fee %</label>
           <input type="number" step="0.1" value={feeRate.kalshi} onChange={e => setFeeRate(p => ({ ...p, kalshi: Number(e.target.value) || 0 }))} className="input-sm w-12" />
+        </div>
+        <div className="flex items-center gap-1">
+          <label className="text-[10px] text-[--text-muted]">Min Sim %</label>
+          <input type="number" step="5" value={minSimilarity} onChange={e => setMinSimilarity(Number(e.target.value) || 30)} className="input-sm w-12" />
         </div>
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">Min ROI %</label>
@@ -348,13 +225,13 @@ export default function Home() {
       {/* Tabs */}
       <div className="tab-bar px-2">
         <button className={`tab-btn ${activeTab === 'matched' ? 'active' : ''}`} onClick={() => setActiveTab('matched')}>
-          🔗 Matched Markets ({filtered.matched.length})
+          🔗 Matched ({filtered.matched.length})
         </button>
         <button className={`tab-btn ${activeTab === 'arb' ? 'active' : ''}`} onClick={() => setActiveTab('arb')}>
           🎯 Arbitrage ({filtered.arb.length})
         </button>
         <button className={`tab-btn ${activeTab === 'intra' ? 'active' : ''}`} onClick={() => setActiveTab('intra')}>
-          📊 Single Platform ({filtered.intra.length})
+          📊 Single ({filtered.intra.length})
         </button>
       </div>
 
@@ -367,26 +244,26 @@ export default function Home() {
             <thead>
               <tr>
                 <th style={{width:25}}>#</th>
-                <th style={{width:50}}>Score</th>
+                <th style={{width:45}}>Sim</th>
                 <th>Polymarket</th>
                 <th style={{width:50}}>P.Yes</th>
                 <th>Kalshi</th>
                 <th style={{width:50}}>K.Yes</th>
                 <th style={{width:45}}>Δ</th>
-                <th style={{width:70}}>Event</th>
-                <th style={{width:90}}>Arb?</th>
+                <th style={{width:150}}>Common Keywords</th>
+                <th style={{width:80}}>Arb?</th>
                 <th style={{width:35}}></th>
               </tr>
             </thead>
             <tbody>
               {filtered.matched.length === 0 ? (
                 <tr><td colSpan={10} className="text-center py-8 text-[--text-muted]">
-                  {isLoading ? 'Loading...' : 'No matched markets found'}
+                  {isLoading ? 'Loading...' : 'No matched markets found. Try lowering Min Sim %.'}
                 </td></tr>
               ) : filtered.matched.map((m, i) => (
                 <tr key={m.id} className={m.hasArb ? 'arb-row' : ''}>
                   <td className="text-[--text-muted] text-[10px]">{i + 1}</td>
-                  <td><span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">{m.score}</span></td>
+                  <td><span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded font-medium">{m.similarity.toFixed(0)}%</span></td>
                   <td>
                     <div className="q-text text-[11px]" title={m.poly.question}>{m.poly.question}</div>
                   </td>
@@ -398,12 +275,12 @@ export default function Home() {
                   <td className={`num font-medium ${m.yesDiff >= 0.1 ? 'num-red' : m.yesDiff >= 0.05 ? 'text-orange-500' : 'text-[--text-muted]'}`}>
                     {(m.yesDiff * 100).toFixed(0)}¢
                   </td>
-                  <td><span className="text-[9px] px-1 py-0.5 bg-gray-100 rounded">{formatEventType(m.eventType)}</span></td>
+                  <td className="text-[9px] text-[--text-muted]">
+                    {m.commonKeywords.slice(0, 5).join(', ')}
+                  </td>
                   <td className="text-[10px]">
                     {m.hasArb ? (
-                      <span className="text-green-600 font-medium">
-                        ✓ {m.roi.toFixed(1)}% ROI
-                      </span>
+                      <span className="text-green-600 font-medium">✓ {m.roi.toFixed(1)}%</span>
                     ) : (
                       <span className="text-[--text-muted]">—</span>
                     )}
@@ -418,37 +295,39 @@ export default function Home() {
           </table>
         )}
 
-        {/* Arbitrage Opportunities */}
+        {/* Arbitrage */}
         {activeTab === 'arb' && (
           <table className="data-table">
             <thead>
               <tr>
                 <th style={{width:25}}>#</th>
+                <th style={{width:40}}>Sim</th>
                 <th>Polymarket</th>
                 <th style={{width:50}}>Price</th>
                 <th>Kalshi</th>
                 <th style={{width:50}}>Price</th>
                 <th style={{width:70}}>Strategy</th>
                 <th style={{width:55}}>Total</th>
-                <th style={{width:55}}>ROI</th>
-                <th style={{width:60}}>Profit</th>
+                <th style={{width:50}}>ROI</th>
+                <th style={{width:55}}>Profit</th>
                 <th style={{width:35}}></th>
               </tr>
             </thead>
             <tbody>
               {filtered.arb.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-8 text-[--text-muted]">
-                  {isLoading ? 'Loading...' : 'No arbitrage opportunities found'}
+                <tr><td colSpan={11} className="text-center py-8 text-[--text-muted]">
+                  {isLoading ? 'Loading...' : 'No arbitrage opportunities'}
                 </td></tr>
               ) : filtered.arb.map((m, i) => {
                 const isPYesKNo = m.bestStrat === 1;
                 return (
-                  <tr key={m.id} className="arb-row cursor-pointer" onClick={() => setExpandedId(expandedId === m.id ? null : m.id)}>
+                  <tr key={m.id} className="arb-row">
                     <td><span className="badge badge-rank">{i + 1}</span></td>
+                    <td><span className="text-[9px] px-1 py-0.5 bg-blue-50 text-blue-700 rounded">{m.similarity.toFixed(0)}%</span></td>
                     <td>
                       <div className="flex items-center gap-1">
                         <span className={`badge ${isPYesKNo ? 'badge-poly' : 'bg-purple-100 text-purple-700'}`}>
-                          {isPYesKNo ? 'YES' : 'NO'}
+                          {isPYesKNo ? 'Y' : 'N'}
                         </span>
                         <span className="q-text text-[11px]" title={m.poly.question}>{m.poly.question}</span>
                       </div>
@@ -457,21 +336,21 @@ export default function Home() {
                     <td>
                       <div className="flex items-center gap-1">
                         <span className={`badge ${isPYesKNo ? 'bg-green-100 text-green-700' : 'badge-kalshi'}`}>
-                          {isPYesKNo ? 'NO' : 'YES'}
+                          {isPYesKNo ? 'N' : 'Y'}
                         </span>
                         <span className="q-text text-[11px]" title={m.kalshi.question}>{m.kalshi.question}</span>
                       </div>
                     </td>
                     <td className="num num-teal">{((isPYesKNo ? m.kNo : m.kYes) * 100).toFixed(0)}¢</td>
-                    <td className="text-[10px] text-[--text-muted]">
-                      P.{isPYesKNo ? 'Yes' : 'No'} + K.{isPYesKNo ? 'No' : 'Yes'}
+                    <td className="text-[9px] text-[--text-muted]">
+                      P.{isPYesKNo ? 'Yes' : 'No'}+K.{isPYesKNo ? 'No' : 'Yes'}
                     </td>
                     <td className="num num-blue font-medium">{m.bestTotal.toFixed(4)}</td>
                     <td><span className="badge badge-roi">+{m.roi.toFixed(1)}%</span></td>
                     <td className="num num-green font-semibold">+${m.profit.toFixed(2)}</td>
                     <td>
-                      <a href={m.poly.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link mr-1">P</a>
-                      <a href={m.kalshi.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="link">K</a>
+                      <a href={m.poly.url} target="_blank" rel="noopener noreferrer" className="link mr-1">P</a>
+                      <a href={m.kalshi.url} target="_blank" rel="noopener noreferrer" className="link">K</a>
                     </td>
                   </tr>
                 );
@@ -491,8 +370,8 @@ export default function Home() {
                 <th style={{width:55}}>Yes&apos;</th>
                 <th style={{width:55}}>No&apos;</th>
                 <th style={{width:55}}>Total</th>
-                <th style={{width:55}}>ROI</th>
-                <th style={{width:60}}>Profit</th>
+                <th style={{width:50}}>ROI</th>
+                <th style={{width:55}}>Profit</th>
                 <th style={{width:35}}></th>
               </tr>
             </thead>
@@ -519,7 +398,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[--border] bg-white px-4 py-1 text-[10px] text-[--text-muted] flex justify-between">
-        <span>⚠️ Always verify resolution rules match before trading</span>
+        <span>⚠️ Verify resolution rules match before trading • Lower &quot;Min Sim %&quot; to find more matches</span>
         <span>Auto-refresh: 60s</span>
       </footer>
     </div>
