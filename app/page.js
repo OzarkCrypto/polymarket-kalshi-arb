@@ -2,6 +2,45 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+// 팀명 정규화 맵
+const TEAM_ALIASES = {
+  // NBA
+  'oklahoma city thunder': 'oklahoma city', 'thunder': 'oklahoma city',
+  'los angeles lakers': 'los angeles l', 'lakers': 'los angeles l',
+  'los angeles clippers': 'los angeles c', 'clippers': 'los angeles c',
+  'golden state warriors': 'golden state', 'warriors': 'golden state',
+  'boston celtics': 'boston', 'celtics': 'boston',
+  'new york knicks': 'new york', 'knicks': 'new york',
+  'cleveland cavaliers': 'cleveland', 'cavaliers': 'cleveland', 'cavs': 'cleveland',
+  'denver nuggets': 'denver', 'nuggets': 'denver',
+  'houston rockets': 'houston', 'rockets': 'houston',
+  'san antonio spurs': 'san antonio', 'spurs': 'san antonio',
+  'detroit pistons': 'detroit', 'pistons': 'detroit',
+  'miami heat': 'miami', 'heat': 'miami',
+  'milwaukee bucks': 'milwaukee', 'bucks': 'milwaukee',
+  'minnesota timberwolves': 'minnesota', 'timberwolves': 'minnesota',
+  'orlando magic': 'orlando', 'magic': 'orlando',
+  'philadelphia 76ers': 'philadelphia', '76ers': 'philadelphia', 'sixers': 'philadelphia',
+  'phoenix suns': 'phoenix', 'suns': 'phoenix',
+  'portland trail blazers': 'portland', 'trail blazers': 'portland', 'blazers': 'portland',
+  'sacramento kings': 'sacramento', 'kings': 'sacramento',
+  'toronto raptors': 'toronto', 'raptors': 'toronto',
+  'indiana pacers': 'indiana', 'pacers': 'indiana',
+  'memphis grizzlies': 'memphis', 'grizzlies': 'memphis',
+  'new orleans pelicans': 'new orleans', 'pelicans': 'new orleans',
+  'dallas mavericks': 'dallas', 'mavericks': 'dallas', 'mavs': 'dallas',
+  'chicago bulls': 'chicago', 'bulls': 'chicago',
+  'atlanta hawks': 'atlanta', 'hawks': 'atlanta',
+  'brooklyn nets': 'brooklyn', 'nets': 'brooklyn',
+  'charlotte hornets': 'charlotte', 'hornets': 'charlotte',
+  'washington wizards': 'washington', 'wizards': 'washington',
+  'utah jazz': 'utah', 'jazz': 'utah',
+  // 리그명 정규화
+  'nba finals': 'pro basketball finals',
+  'nba championship': 'pro basketball finals',
+  'pro basketball championship': 'pro basketball finals',
+};
+
 export default function Home() {
   const [polymarketData, setPolymarketData] = useState([]);
   const [kalshiData, setKalshiData] = useState([]);
@@ -46,7 +85,7 @@ export default function Home() {
 
   // 텍스트 정규화 (최대한 동일하게 만들기)
   const normalize = useCallback((text) => {
-    return text.toLowerCase()
+    let norm = text.toLowerCase()
       .replace(/['']/g, "'")
       .replace(/[""]/g, '"')
       .replace(/\?/g, '')
@@ -60,6 +99,13 @@ export default function Home() {
       .replace(/%/g, ' percent')
       .replace(/\s+/g, ' ')
       .trim();
+    
+    // 팀명/리그명 정규화 적용
+    for (const [alias, normalized] of Object.entries(TEAM_ALIASES)) {
+      norm = norm.replace(new RegExp(`\\b${alias}\\b`, 'gi'), normalized);
+    }
+    
+    return norm;
   }, []);
 
   // 매우 적은 불용어만 제거 (핵심 단어는 모두 유지)
@@ -120,15 +166,15 @@ export default function Home() {
       return { match: false, reason: 'negation' };
     }
 
-    // 2. Jaccard 유사도 80% 이상 필수
+    // 2. Jaccard 유사도 70% 이상 필수 (팀명 정규화 후)
     const jaccardSim = jaccard(words1, words2);
-    if (jaccardSim < 0.8) {
+    if (jaccardSim < 0.7) {
       return { match: false, reason: 'jaccard', similarity: jaccardSim };
     }
 
-    // 3. 순서 유사도 60% 이상 필수
+    // 3. 순서 유사도 50% 이상 필수
     const seqSim = sequenceSimilarity(words1, words2);
-    if (seqSim < 0.6) {
+    if (seqSim < 0.5) {
       return { match: false, reason: 'sequence', similarity: seqSim };
     }
 
