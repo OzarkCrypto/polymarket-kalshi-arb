@@ -23,9 +23,9 @@ export async function GET() {
     
     const data = await response.json();
     
-    // Process and filter markets
+    // Process and filter markets (status is 'active' not 'open')
     const processed = (data.markets || [])
-      .filter(m => m.yes_ask && m.no_ask && m.status === 'open')
+      .filter(m => m.yes_ask && m.no_ask && m.status === 'active')
       .map(m => {
         const yesPrice = (m.yes_ask || 0) / 100; // Convert cents to dollars
         const noPrice = (m.no_ask || 0) / 100;
