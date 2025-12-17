@@ -1,27 +1,58 @@
 import { NextResponse } from 'next/server';
 
+// 주요 스포츠 시리즈 티커
+const SPORTS_SERIES = [
+  'KXNFLGAME', 'KXNBAGAME', 'KXMLBGAME', 'KXNHLGAME',
+  'KXNCAAFGAME', 'KXNCAABGAME', 'KXEPLGAME', 'KXLALIGAGAME',
+  'KXSABOREDGAME', 'KXBUNDESLIGAGAME', 'KXCHAMPIONSLEAGUEGAME',
+  'KXUFCFIGHT', 'KXPGAGAME', 'KXTENNISGAME', 'KXF1RACE',
+  'KXNFLWINS', 'KXNBAWINS', 'KXMLBWINS', 'KXNHLWINS'
+];
+
 export async function GET() {
   try {
-    const params = new URLSearchParams({
-      limit: '1000',
-      status: 'open'
-    });
+    const allMarkets = [];
     
-    const response = await fetch(
-      `https://api.elections.kalshi.com/trade-api/v2/markets?${params}`,
+    // 1. 일반 마켓 가져오기
+    const generalResponse = await fetch(
+      `https://api.elections.kalshi.com/trade-api/v2/markets?limit=1000`,
       { 
         next: { revalidate: 30 },
-        headers: {
-          'Accept': 'application/json',
-        }
+        headers: { 'Accept': 'application/json' }
       }
     );
     
-    if (!response.ok) {
-      throw new Error(`Kalshi API error: ${response.status}`);
+    if (generalResponse.ok) {
+      const generalData = await generalResponse.json();
+      allMarkets.push(...(generalData.markets || []));
     }
     
-    const data = await response.json();
+    // 2. 스포츠 시리즈별 마켓 가져오기 (병렬)
+    const sportsFetches = SPORTS_SERIES.map(series =>
+      fetch(
+        `https://api.elections.kalshi.com/trade-api/v2/markets?limit=200&series_ticker=${series}`,
+        { 
+          next: { revalidate: 30 },
+          headers: { 'Accept': 'application/json' }
+        }
+      ).then(r => r.ok ? r.json() : { markets: [] })
+       .catch(() => ({ markets: [] }))
+    );
+    
+    const sportsResults = await Promise.all(sportsFetches);
+    for (const result of sportsResults) {
+      allMarkets.push(...(result.markets || []));
+    }
+    
+    // 중복 제거
+    const seen = new Set();
+    const uniqueMarkets = allMarkets.filter(m => {
+      if (seen.has(m.ticker)) return false;
+      seen.add(m.ticker);
+      return true;
+    });
+    
+    const data = { markets: uniqueMarkets };
     
     // Process and filter markets (status is 'active' not 'open')
     const processed = (data.markets || [])
