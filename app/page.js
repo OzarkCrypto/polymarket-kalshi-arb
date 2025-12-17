@@ -2,6 +2,51 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+// 알려진 엔티티들
+const PERSONS = [
+  'trump', 'biden', 'harris', 'obama', 'putin', 'zelenskyy', 'zelensky', 'xi jinping', 'xi',
+  'netanyahu', 'kim jong un', 'kim', 'modi', 'macron', 'scholz', 'trudeau', 'starmer',
+  'musk', 'elon', 'bezos', 'zuckerberg', 'altman', 'nadella', 'cook', 'pichai',
+  'kevin warsh', 'warsh', 'kevin hassett', 'hassett', 'jerome powell', 'powell', 'yellen',
+  'pete hegseth', 'hegseth', 'marco rubio', 'rubio', 'tulsi gabbard', 'gabbard',
+  'pam bondi', 'bondi', 'rfk', 'kennedy', 'kristi noem', 'noem', 'vivek', 'ramaswamy',
+  'desantis', 'newsom', 'vance', 'walz', 'pelosi', 'mcconnell', 'schumer',
+  'lewandowski', 'ronaldo', 'messi', 'lebron', 'curry', 'mahomes', 'swift', 'beyonce',
+  'sam bankman-fried', 'sbf', 'cz', 'changpeng zhao', 'gary gensler', 'gensler',
+  'assange', 'snowden', 'bannon', 'gaetz', 'hunter biden'
+];
+
+const COUNTRIES_ORGS = [
+  'us', 'usa', 'united states', 'america', 'russia', 'ukraine', 'china', 'israel', 
+  'iran', 'north korea', 'gaza', 'taiwan', 'nato', 'eu', 'european union',
+  'fed', 'federal reserve', 'sec', 'doj', 'fbi', 'cia', 'pentagon',
+  'openai', 'anthropic', 'google', 'meta', 'microsoft', 'apple', 'amazon', 'nvidia',
+  'tesla', 'spacex', 'twitter', 'x', 'tiktok', 'bytedance', 'bitcoin', 'btc', 'ethereum', 'eth'
+];
+
+// 액션 패턴들
+const ACTION_PATTERNS = {
+  'nominate': ['nominate', 'announce.*as', 'name.*as', 'pick.*for', 'choose.*as'],
+  'meet': ['meet', 'meeting', 'summit', 'talks with', 'meet with'],
+  'visit': ['visit'],
+  'resign': ['resign', 'step down', 'leave', 'out as', 'depart'],
+  'fire': ['fire', 'remove', 'oust', 'dismiss'],
+  'win': ['win', 'wins', 'victory', 'champion', 'beat'],
+  'lose': ['lose', 'loses', 'defeat', 'eliminated'],
+  'reach_price': ['reach \\$', 'hit \\$', 'above \\$', 'below \\$', 'at \\$'],
+  'acquire': ['acquire', 'buy', 'purchase', 'merger', 'takeover'],
+  'ban': ['ban', 'prohibit', 'block', 'sanction'],
+  'pardon': ['pardon'],
+  'indict': ['indict', 'charge', 'prosecute', 'arrest'],
+  'die': ['die', 'death', 'pass away', 'assassinate'],
+  'war': ['war', 'invasion', 'attack', 'strike', 'bomb'],
+  'ceasefire': ['ceasefire', 'peace', 'truce', 'armistice'],
+  'recession': ['recession'],
+  'rate': ['rate cut', 'rate hike', 'interest rate'],
+  'ipo': ['ipo', 'go public', 'listing'],
+  'launch': ['launch', 'release', 'announce', 'unveil'],
+};
+
 export default function Home() {
   const [polymarketData, setPolymarketData] = useState([]);
   const [kalshiData, setKalshiData] = useState([]);
@@ -11,7 +56,6 @@ export default function Home() {
   const [budget, setBudget] = useState(100);
   const [feeRate, setFeeRate] = useState({ polymarket: 1, kalshi: 1 });
   const [minROI, setMinROI] = useState(0);
-  const [minSimilarity, setMinSimilarity] = useState(35);
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchPolymarket = useCallback(async () => {
@@ -45,50 +89,160 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  // 키워드 추출 (더 관대하게)
-  const extractKeywords = useCallback((text) => {
-    if (!text) return new Set();
-    const stopwords = new Set([
-      'will', 'the', 'a', 'an', 'be', 'is', 'are', 'to', 'of', 'in', 'for', 'on', 
-      'by', 'or', 'and', 'before', 'after', 'this', 'that', 'next', 'first', 'who', 
-      'what', 'when', 'where', 'how', 'than', 'more', 'less', 'any', 'have', 'has',
-      'does', 'do', 'did', 'been', 'being', 'their', 'there', 'they', 'them', 'its'
-    ]);
-    const words = text.toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !stopwords.has(w));
-    return new Set(words);
+  // 텍스트 정규화
+  const normalize = useCallback((text) => {
+    return text.toLowerCase()
+      .replace(/['']/g, "'")
+      .replace(/[""]/g, '"')
+      .replace(/[^a-z0-9\s$%]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }, []);
 
-  // Jaccard 유사도
-  const calcSimilarity = useCallback((kw1, kw2) => {
-    if (!kw1.size || !kw2.size) return 0;
-    const intersection = [...kw1].filter(w => kw2.has(w));
-    const union = new Set([...kw1, ...kw2]);
-    return (intersection.length / union.size) * 100;
-  }, []);
+  // 주체(인물/조직) 추출
+  const extractSubjects = useCallback((text) => {
+    const norm = normalize(text);
+    const found = new Set();
+    
+    // 인물 찾기
+    for (const person of PERSONS) {
+      if (norm.includes(person)) {
+        // 정규화된 이름 사용 (zelensky -> zelenskyy, elon -> musk 등)
+        const normalized = person
+          .replace('zelensky', 'zelenskyy')
+          .replace('elon', 'musk')
+          .replace(/^(kevin )?warsh$/, 'warsh')
+          .replace(/^(kevin )?hassett$/, 'hassett');
+        found.add(normalized);
+      }
+    }
+    
+    // 조직/국가 찾기
+    for (const org of COUNTRIES_ORGS) {
+      if (norm.includes(org)) {
+        const normalized = org
+          .replace('united states', 'usa')
+          .replace('america', 'usa')
+          .replace('federal reserve', 'fed');
+        found.add(normalized);
+      }
+    }
+    
+    return [...found].sort();
+  }, [normalize]);
 
-  // 공통 키워드 찾기
-  const findCommonKeywords = useCallback((kw1, kw2) => {
-    return [...kw1].filter(w => kw2.has(w));
-  }, []);
+  // 액션 추출
+  const extractAction = useCallback((text) => {
+    const norm = normalize(text);
+    
+    for (const [action, patterns] of Object.entries(ACTION_PATTERNS)) {
+      for (const pattern of patterns) {
+        if (new RegExp(pattern, 'i').test(norm)) {
+          return action;
+        }
+      }
+    }
+    return null;
+  }, [normalize]);
 
-  // 모든 매칭된 마켓 찾기
+  // 연도/시간 추출
+  const extractTimeframe = useCallback((text) => {
+    const norm = normalize(text);
+    
+    // 연도 찾기
+    const yearMatch = norm.match(/\b(202[4-9]|203[0-9])\b/);
+    if (yearMatch) return yearMatch[1];
+    
+    // "before/by [date]" 패턴
+    const beforeMatch = norm.match(/before\s+(\w+\s+\d+)/);
+    if (beforeMatch) return `before_${beforeMatch[1]}`;
+    
+    return null;
+  }, [normalize]);
+
+  // 부정어 감지
+  const hasNegation = useCallback((text) => {
+    const norm = normalize(text);
+    const negations = [' not ', " won't ", " won't ", ' never ', ' no ', ' refuse ', ' fail '];
+    return negations.some(neg => norm.includes(neg));
+  }, [normalize]);
+
+  // 목적어/대상 추출 (Fed Chair, CEO, PM 등)
+  const extractTarget = useCallback((text) => {
+    const norm = normalize(text);
+    
+    const targets = [
+      { pattern: /fed chair|federal reserve chair/i, value: 'fed_chair' },
+      { pattern: /prime minister|pm of/i, value: 'pm' },
+      { pattern: /ceo of (\w+)/i, value: 'ceo' },
+      { pattern: /president of/i, value: 'president' },
+      { pattern: /super bowl/i, value: 'super_bowl' },
+      { pattern: /world series/i, value: 'world_series' },
+      { pattern: /championship/i, value: 'championship' },
+      { pattern: /\$[\d,]+/i, value: 'price_target' },
+    ];
+    
+    for (const { pattern, value } of targets) {
+      if (pattern.test(norm)) return value;
+    }
+    return null;
+  }, [normalize]);
+
+  // 정밀 매칭 함수
+  const isExactMatch = useCallback((q1, q2) => {
+    const subj1 = extractSubjects(q1);
+    const subj2 = extractSubjects(q2);
+    const action1 = extractAction(q1);
+    const action2 = extractAction(q2);
+    const time1 = extractTimeframe(q1);
+    const time2 = extractTimeframe(q2);
+    const neg1 = hasNegation(q1);
+    const neg2 = hasNegation(q2);
+    const target1 = extractTarget(q1);
+    const target2 = extractTarget(q2);
+
+    // 디버그 정보
+    const debug = {
+      subj1, subj2, action1, action2, time1, time2, neg1, neg2, target1, target2
+    };
+
+    // 1. 주체가 정확히 같아야 함 (가장 중요)
+    if (subj1.length === 0 || subj2.length === 0) return { match: false, reason: 'no_subject' };
+    if (subj1.join(',') !== subj2.join(',')) return { match: false, reason: 'subject_mismatch', debug };
+
+    // 2. 액션이 같아야 함
+    if (action1 && action2 && action1 !== action2) return { match: false, reason: 'action_mismatch', debug };
+
+    // 3. 부정어가 같아야 함 (둘 다 긍정 or 둘 다 부정)
+    if (neg1 !== neg2) return { match: false, reason: 'negation_mismatch', debug };
+
+    // 4. 시간이 있으면 같아야 함
+    if (time1 && time2 && time1 !== time2) return { match: false, reason: 'time_mismatch', debug };
+
+    // 5. 타겟이 있으면 같아야 함
+    if (target1 && target2 && target1 !== target2) return { match: false, reason: 'target_mismatch', debug };
+
+    // 매칭 성공
+    return {
+      match: true,
+      subjects: subj1,
+      action: action1 || action2,
+      timeframe: time1 || time2,
+      target: target1 || target2,
+      debug
+    };
+  }, [extractSubjects, extractAction, extractTimeframe, hasNegation, extractTarget]);
+
+  // 매칭된 마켓 찾기
   const matchedMarkets = useMemo(() => {
     const matches = [];
     const seen = new Set();
 
     for (const p of polymarketData) {
-      const pKw = extractKeywords(p.question);
-      
       for (const k of kalshiData) {
-        const kKw = extractKeywords(k.question);
-        const similarity = calcSimilarity(pKw, kKw);
-        const commonKw = findCommonKeywords(pKw, kKw);
+        const result = isExactMatch(p.question, k.question);
         
-        // 매칭 조건: 유사도 기준 이상 OR 공통 키워드 3개 이상
-        if (similarity >= minSimilarity || commonKw.length >= 3) {
+        if (result.match) {
           const key = [p.id, k.id].sort().join('-');
           if (seen.has(key)) continue;
           seen.add(key);
@@ -106,8 +260,10 @@ export default function Home() {
 
           matches.push({
             id: key,
-            similarity,
-            commonKeywords: commonKw,
+            subjects: result.subjects,
+            action: result.action,
+            timeframe: result.timeframe,
+            target: result.target,
             poly: p,
             kalshi: k,
             pYes: p.yesPrice,
@@ -127,8 +283,8 @@ export default function Home() {
       }
     }
     
-    return matches.sort((a, b) => b.similarity - a.similarity);
-  }, [polymarketData, kalshiData, feeRate, budget, minSimilarity, extractKeywords, calcSimilarity, findCommonKeywords]);
+    return matches.sort((a, b) => b.yesDiff - a.yesDiff);
+  }, [polymarketData, kalshiData, feeRate, budget, isExactMatch]);
 
   // 차익거래 기회만
   const arbOpportunities = useMemo(() => {
@@ -169,7 +325,7 @@ export default function Home() {
     matched: matchedMarkets.filter(m => !searchQuery || 
       m.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.commonKeywords.some(kw => kw.includes(searchQuery.toLowerCase()))),
+      m.subjects?.some(s => s.includes(searchQuery.toLowerCase()))),
     arb: arbOpportunities.filter(m => !searchQuery || 
       m.poly.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.kalshi.question.toLowerCase().includes(searchQuery.toLowerCase())),
@@ -185,6 +341,7 @@ export default function Home() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <h1 className="font-semibold text-sm">Polymarket × Kalshi Scanner</h1>
+            <span className="text-[10px] text-[--text-muted]">Strict Matching: Subject + Action + Time</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <span className="badge badge-poly">POLY {polymarketData.length}</span>
@@ -208,10 +365,6 @@ export default function Home() {
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">K.Fee %</label>
           <input type="number" step="0.1" value={feeRate.kalshi} onChange={e => setFeeRate(p => ({ ...p, kalshi: Number(e.target.value) || 0 }))} className="input-sm w-12" />
-        </div>
-        <div className="flex items-center gap-1">
-          <label className="text-[10px] text-[--text-muted]">Min Sim %</label>
-          <input type="number" step="5" value={minSimilarity} onChange={e => setMinSimilarity(Number(e.target.value) || 30)} className="input-sm w-12" />
         </div>
         <div className="flex items-center gap-1">
           <label className="text-[10px] text-[--text-muted]">Min ROI %</label>
@@ -244,13 +397,13 @@ export default function Home() {
             <thead>
               <tr>
                 <th style={{width:25}}>#</th>
-                <th style={{width:45}}>Sim</th>
+                <th style={{width:120}}>Subject</th>
+                <th style={{width:70}}>Action</th>
                 <th>Polymarket</th>
                 <th style={{width:50}}>P.Yes</th>
                 <th>Kalshi</th>
                 <th style={{width:50}}>K.Yes</th>
                 <th style={{width:45}}>Δ</th>
-                <th style={{width:150}}>Common Keywords</th>
                 <th style={{width:80}}>Arb?</th>
                 <th style={{width:35}}></th>
               </tr>
@@ -258,12 +411,13 @@ export default function Home() {
             <tbody>
               {filtered.matched.length === 0 ? (
                 <tr><td colSpan={10} className="text-center py-8 text-[--text-muted]">
-                  {isLoading ? 'Loading...' : 'No matched markets found. Try lowering Min Sim %.'}
+                  {isLoading ? 'Loading...' : 'No exact matches found. Markets must have same subject, action, and timeframe.'}
                 </td></tr>
               ) : filtered.matched.map((m, i) => (
                 <tr key={m.id} className={m.hasArb ? 'arb-row' : ''}>
                   <td className="text-[--text-muted] text-[10px]">{i + 1}</td>
-                  <td><span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded font-medium">{m.similarity.toFixed(0)}%</span></td>
+                  <td className="text-[11px] font-medium capitalize">{m.subjects?.join(', ')}</td>
+                  <td><span className="text-[9px] px-1 py-0.5 bg-blue-50 text-blue-700 rounded">{m.action || '—'}</span></td>
                   <td>
                     <div className="q-text text-[11px]" title={m.poly.question}>{m.poly.question}</div>
                   </td>
@@ -274,9 +428,6 @@ export default function Home() {
                   <td className="num">{(m.kYes * 100).toFixed(0)}¢</td>
                   <td className={`num font-medium ${m.yesDiff >= 0.1 ? 'num-red' : m.yesDiff >= 0.05 ? 'text-orange-500' : 'text-[--text-muted]'}`}>
                     {(m.yesDiff * 100).toFixed(0)}¢
-                  </td>
-                  <td className="text-[9px] text-[--text-muted]">
-                    {m.commonKeywords.slice(0, 5).join(', ')}
                   </td>
                   <td className="text-[10px]">
                     {m.hasArb ? (
@@ -301,7 +452,7 @@ export default function Home() {
             <thead>
               <tr>
                 <th style={{width:25}}>#</th>
-                <th style={{width:40}}>Sim</th>
+                <th style={{width:100}}>Subject</th>
                 <th>Polymarket</th>
                 <th style={{width:50}}>Price</th>
                 <th>Kalshi</th>
@@ -323,7 +474,7 @@ export default function Home() {
                 return (
                   <tr key={m.id} className="arb-row">
                     <td><span className="badge badge-rank">{i + 1}</span></td>
-                    <td><span className="text-[9px] px-1 py-0.5 bg-blue-50 text-blue-700 rounded">{m.similarity.toFixed(0)}%</span></td>
+                    <td className="text-[11px] font-medium capitalize">{m.subjects?.join(', ')}</td>
                     <td>
                       <div className="flex items-center gap-1">
                         <span className={`badge ${isPYesKNo ? 'badge-poly' : 'bg-purple-100 text-purple-700'}`}>
@@ -398,7 +549,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[--border] bg-white px-4 py-1 text-[10px] text-[--text-muted] flex justify-between">
-        <span>⚠️ Verify resolution rules match before trading • Lower &quot;Min Sim %&quot; to find more matches</span>
+        <span>⚠️ Strict matching: Same subject + action + timeframe required</span>
         <span>Auto-refresh: 60s</span>
       </footer>
     </div>
